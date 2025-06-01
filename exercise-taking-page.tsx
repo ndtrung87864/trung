@@ -784,11 +784,35 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
       }
     }
     
+    // Try to detect if the document is for written exercises based on file name
+    if (!knownQuestionType && fileData?.fileName) {
+      const fileName = fileData.fileName.toLowerCase();
+      if (
+        fileName.includes("written") || 
+        fileName.includes("fill") || 
+        fileName.includes("blank") ||
+        fileName.includes("viet") ||
+        fileName.includes("dien") ||
+        fileName.includes("tu luan") ||
+        fileName.includes("tuluan")
+      ) {
+        console.log("Document filename suggests written exercise type:", fileData.fileName);
+        knownQuestionType = "written";
+      }
+    }
+    
     // Select appropriate prompt based on known question type
-    const extractionPrompt = 
-      knownQuestionType === "written" ? createWrittenPrompt(questionCount) :
-      allowReferences ? createReferencePrompt(questionCount) : 
-      createExtractionPrompt(questionCount);
+    let extractionPrompt;
+    if (knownQuestionType === "written") {
+      extractionPrompt = createWrittenPrompt(questionCount);
+      console.log("Using WRITTEN prompt for extraction with question count:", questionCount);
+    } else if (allowReferences) {
+      extractionPrompt = createReferencePrompt(questionCount);
+      console.log("Using REFERENCE prompt for extraction with question count:", questionCount);
+    } else {
+      extractionPrompt = createExtractionPrompt(questionCount);
+      console.log("Using STANDARD prompt for extraction with question count:", questionCount);
+    }
 
     setExtractionProgress(60);
 
@@ -807,14 +831,66 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
     setProcessingStage("Đang phân tích câu hỏi");
     
     const questions = extractQuestionsFromResponse(extractionResult);
+    console.log(`Extracted ${questions.length} questions`, questions);
     
     // Force question type consistency if we know what it should be
     if (knownQuestionType === "written" && questions.length > 0) {
+      console.log("Forcing question type to written based on known type");
       questions.forEach(q => {
         q.type = "written";
         if (!q.correctAnswer) q.correctAnswer = "Unknown";
         if (!Array.isArray(q.options)) q.options = [];
       });
+    } else if (questions.length > 0) {
+      // Perform additional detection for written questions
+      // This is especially important for small question sets
+      const writtenIndicators = extractionResult.toLowerCase();
+      
+      // Check if the result explicitly mentions written questions
+      const explicitWrittenMention = 
+        writtenIndicators.includes("câu hỏi tự luận viết") || 
+        writtenIndicators.includes("viết trực tiếp") ||
+        writtenIndicators.includes("written question") ||
+        writtenIndicators.includes("fill-in") ||
+        writtenIndicators.includes("điền vào chỗ trống");
+      
+      // Additional condition: check if ALL questions have empty options OR type="written"
+      const allQuestionsHaveNoOptions = questions.every(q => 
+        !q.options || q.options.length === 0 || q.type === "written"
+      );
+      
+      // Additional condition: check if ANY question has type="written"
+      const anyQuestionHasWrittenType = questions.some(q => q.type === "written");
+      
+      // Additional condition: check if any questions have text with fill-in indicators
+      const hasFillInIndicators = questions.some(q => {
+        const text = q.text?.toLowerCase() || '';
+        return text.includes("___") || 
+               text.includes("...") || 
+               text.includes("điền vào") ||
+               text.includes("điền")  ||
+               text.includes("viết") ||
+               text.includes("hoàn thành") ||
+               text.match(/\([\s\.]*\)/) !== null;
+      });
+      
+      // Force written type if these conditions are met
+      if ((explicitWrittenMention && (allQuestionsHaveNoOptions || anyQuestionHasWrittenType)) || 
+          (allQuestionsHaveNoOptions && hasFillInIndicators)) {
+        console.log("Forcing question type to written based on content analysis");
+        questions.forEach(q => {
+          q.type = "written";
+          if (!q.correctAnswer) {
+            // Try to extract correct answer from options if available
+            if (q.options && q.options.length > 0) {
+              q.correctAnswer = q.options.join(" / ");
+            } else {
+              q.correctAnswer = "Unknown";
+            }
+          }
+          q.options = [];
+        });
+      }
     }
     
     if (questions.length > 0) {
@@ -890,11 +966,64 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
       try {
         extractedQuestions = JSON.parse(jsonString);
       } catch {
-        console.log("Không thể phân tích JSON, coi như bài tập thực hành");
-        return [];
+        // If direct parsing fails, try to extract individually formatted question objects
+        try {
+          // Look for array-like structure with objects
+          const objectMatches = jsonString.match(/\{\s*"id"\s*:.*?\}/);
+          if (objectMatches && objectMatches.length > 0) {
+            extractedQuestions = objectMatches.map(objStr => {
+              // Fix common JSON issues
+              const fixedStr = objStr
+                .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g, '"$2":') // Fix unquoted property names
+                .replace(/'/g, '"'); // Replace single quotes with double quotes
+              
+              try {
+                return JSON.parse(fixedStr);
+              } catch {
+                console.error("Failed to parse individual question object:", fixedStr);
+                return null;
+              }
+            }).filter(Boolean);
+            
+            if (extractedQuestions.length > 0) {
+              console.log("Successfully extracted question objects using regex");
+            }
+          }
+        } catch (regexErr) {
+          console.error("Regex extraction failed:", regexErr);
+        }
+        
+        // If all parsing attempts fail, return empty array
+        if (!extractedQuestions) {
+          console.log("Could not parse JSON or extract questions, treating as essay exercise");
+          return [];
+        }
       }
 
       if (Array.isArray(extractedQuestions) && extractedQuestions.length > 0) {
+        // Additional processing to ensure consistency
+        extractedQuestions = extractedQuestions.map(q => {
+          // Make sure each question has required fields
+          if (!q.id) q.id = `q${Math.random().toString(36).substring(2, 9)}`;
+          if (!q.text) q.text = "Question text missing";
+          
+          // Handle written questions more reliably
+          if (q.type === "written") {
+            return {
+              ...q,
+              options: Array.isArray(q.options) ? q.options : [],
+              correctAnswer: q.correctAnswer || "Unknown"
+            };
+          }
+          
+          // Ensure options is an array for all questions
+          if (!Array.isArray(q.options)) {
+            q.options = [];
+          }
+          
+          return q;
+        });
+        
         return cleanQuestionsData(extractedQuestions);
       }
     } catch (err) {
@@ -903,7 +1032,7 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
     return [];
   };
   
-  // Process extracted questions and set state - add better question type detection
+  // Process extracted questions and set state with more aggressive written detection
   const processExtractedQuestions = (questions: Question[], exerciseData: Exercise) => {
     let processedQuestions = questions;
     
@@ -920,21 +1049,69 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
       }
     }
 
+    // Enhanced detection with different weightings for small question sets
+    const isSmallQuestionSet = processedQuestions.length < 20;
+    
     // Detect question types with more emphasis on type field
     const hasExplicitWrittenType = processedQuestions.some(q => q.type === "written");
     const hasMultipleChoice = processedQuestions.filter(q => Array.isArray(q.options) && q.options.length >= 2).length > 0;
+    const hasCorrectAnswers = processedQuestions.filter(q => q.correctAnswer && q.correctAnswer.trim() !== "").length > 0;
     
-    // If we have mixed question types, prioritize the explicit type markers
+    // Empty options arrays are a strong indicator of written questions
+    const hasEmptyOptions = processedQuestions.filter(q => 
+      Array.isArray(q.options) && q.options.length === 0 && q.text && q.text.trim() !== ""
+    ).length > 0;
+    
+    // Calculate written style ratio
+    const writtenStyleQuestions = processedQuestions.filter(q => {
+      if (!q.text) return false;
+      const text = q.text.toLowerCase();
+      return (
+        text.includes("điền vào") || 
+        text.includes("điền") || 
+        text.includes("viết") || 
+        text.includes("hoàn thành") ||
+        text.includes("nêu") || 
+        text.includes("trả lời") ||
+        text.includes("___") ||
+        text.includes("...") ||
+        text.match(/\(\s*\.\.\.\s*\)/) !== null
+      );
+    }).length;
+    
+    const writtenStyleRatio = processedQuestions.length > 0 ? 
+      writtenStyleQuestions / processedQuestions.length : 0;
+    
+    // Special case for small question sets - be more aggressive about detecting written questions
+    const smallSetWrittenThreshold = isSmallQuestionSet ? 0.3 : 0.5;
+    
+    console.log("Question type analysis:", {
+      questionCount: processedQuestions.length,
+      hasExplicitWrittenType,
+      hasMultipleChoice,
+      hasCorrectAnswers,
+      hasEmptyOptions,
+      writtenStyleQuestions,
+      writtenStyleRatio,
+      threshold: smallSetWrittenThreshold
+    });
+    
+    // Decision logic for exercise type with more factors considered
     let exerciseType: ExerciseType;
     
-    if (hasExplicitWrittenType) {
-      // If any questions have explicit written type, make all of them written
-      console.log("Setting exercise type to written based on type field");
+    if (hasExplicitWrittenType || 
+        (hasEmptyOptions && hasCorrectAnswers) || 
+        (isSmallQuestionSet && hasEmptyOptions) ||  // More aggressive for small sets
+        (writtenStyleRatio >= smallSetWrittenThreshold && !hasMultipleChoice)) {
+      console.log("Setting exercise type to written based on combined factors");
       exerciseType = "written";
+      
       // Ensure all questions have written type for consistency
       processedQuestions.forEach(q => {
         if (q.type !== "written") q.type = "written";
         if (!q.correctAnswer) q.correctAnswer = "Unknown";
+        // Ensure options is an empty array for all written questions
+        if (!Array.isArray(q.options)) q.options = [];
       });
     } else if (hasMultipleChoice) {
       console.log("Setting exercise type to multiple-choice based on options");
@@ -944,7 +1121,7 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
         if (q.type === "written") delete q.type;
       });
     } else {
-      // Fallback to essay if no clear question type
+      // Only fallback to essay as last resort
       console.log("Setting exercise type to essay as fallback");
       exerciseType = "essay";
     }
@@ -1121,7 +1298,7 @@ export const ExerciseTakingPage = ({ exercise }: { exercise?: Exercise }) => {
       2. ĐỀ VIẾT TRỰC TIẾP (Written):
         - Dấu hiệu:
           * Có danh sách câu hỏi yêu cầu trả lời ngắn (1-3 từ, 1 câu, định nghĩa, công thức).
-          * Không có lựa chọn đáp án A, B, C, D.
+          * Các lựa chọn đáp án A, B, C, D( nếu có ) không phải là đáp án mà là 1 phần của câu hỏi.
           * Có dấu gạch dưới: "___", chỗ trống: "(...)", hoặc ô vuông để điền.
           * Từ khóa: "Điền", "Viết công thức", "Nêu định nghĩa", "Cho biết tên", "Tính giá trị", "định nghĩa ngắn gọn", "công thức", "kết quả số", "tên thuật ngữ".
           * Dạng: "Định nghĩa enzyme là gì?", "Công thức tính diện tích = ?".
