@@ -1,0 +1,725 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  //provider     = "postgresql"
+  provider     = "mysql"
+  url          = env("DATABASE_URL")
+  relationMode = "prisma"
+}
+
+model Profile {
+  id       String   @id @default(uuid())
+  userId   String   @unique
+  name     String
+  imageUrl String   @db.Text
+  email    String   @db.Text
+  role     UserRole @default(USER)
+
+  servers  Server[]
+  members  Member[]
+  channels Channel[]
+
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  Score         Score[]
+  SystemSession SystemSession[]
+  SystemLog     SystemLog[]
+
+  // Add the missing opposite relation field for ExerciseResult
+  exerciseResults ExerciseResult[]
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+model Server {
+  id         String  @id @default(uuid())
+  name       String
+  imageUrl   String  @db.Text
+  inviteCode String  @unique
+  isPublic   Boolean @default(true) // Thêm trường này: true = public, false = private
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  members  Member[]
+  channels Channel[]
+
+  fields ServerField[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([profileId])
+}
+
+enum MemberRole {
+  ADMIN
+  MODERATOR
+  GUEST
+}
+
+enum MemberStatus {
+  ACTIVE
+  PENDING
+  REJECTED
+}
+
+model Member {
+  id     String       @id @default(uuid())
+  role   MemberRole   @default(GUEST)
+  status MemberStatus @default(ACTIVE) // Thêm trường này
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  messages       Message[]
+  directMessages DirectMessage[]
+
+  conversationsInitiated Conversation[] @relation("MemberOne")
+  conversationsReceived  Conversation[] @relation("MemberTwo")
+
+  // Thêm các trường cho hệ thống pending
+  requestedAt  DateTime? // Thời gian yêu cầu tham gia
+  approvedAt   DateTime? // Thời gian được duyệt
+  approvedBy   String? // ID của admin/moderator duyệt
+  rejectedAt   DateTime? // Thời gian bị từ chối
+  rejectedBy   String? // ID của admin/moderator từ chối
+  rejectReason String? // Lý do từ chối
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([profileId])
+  @@index([serverId])
+  @@index([status]) // Thêm index cho status
+}
+
+enum ChannelType {
+  TEXT
+  AUDIO
+  VIDEO
+}
+
+model Channel {
+  id   String      @id @default(uuid())
+  name String
+  type ChannelType @default(TEXT)
+
+  profileId String
+  profile   Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  fieldId String? // Thêm dòng này
+  field   Field?  @relation(fields: [fieldId], references: [id], onDelete: SetNull) // Thêm dòng này
+
+  messages  Message[]
+  exams     Exam[]
+  exercises Exercise[] // Add this line to establish the relation to Exercise
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serverId])
+  @@index([profileId])
+  @@index([fieldId]) // Thêm index cho fieldId nếu cần
+}
+
+model Message {
+  id      String @id @default(uuid())
+  content String @db.Text
+
+  fileUrl String? @db.Text
+
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  channelId String
+  channel   Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  deleted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([memberId])
+  @@index([channelId])
+}
+
+model Conversation {
+  id String @id @default(uuid())
+
+  memberOneId String
+  memberOne   Member @relation("MemberOne", fields: [memberOneId], references: [id], onDelete: Cascade)
+
+  memberTwoId String
+  memberTwo   Member @relation("MemberTwo", fields: [memberTwoId], references: [id], onDelete: Cascade)
+
+  directMessages DirectMessage[]
+
+  @@unique([memberOneId, memberTwoId])
+  @@index([memberTwoId])
+}
+
+model DirectMessage {
+  id      String @id @default(uuid())
+  content String @db.Text
+
+  fileUrl String? @db.Text
+
+  memberId String
+  member   Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  deleted Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([memberId])
+  @@index([conversationId])
+}
+
+model Model {
+  id        String     @id @default(uuid())
+  name      String
+  isActive  Boolean    @default(true)
+  fields    Field[]
+  chatboxes Chatbox[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  Score     Score[]
+  Exam      Exam[]
+  Exercise  Exercise[]
+}
+
+model Field {
+  id           String         @id @default(uuid())
+  name         String
+  description  String?
+  prompt       String?        @db.Text // Prompt huấn luyện cho lĩnh vực này
+  isActive     Boolean        @default(true)
+  modelId      String
+  model        Model          @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  files        File[]
+  chatboxes    Chatbox[]
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  FieldChatbox FieldChatbox[]
+  Score        Score[]
+  Channel      Channel[]
+  // Remove Exam relation
+  Exercise     Exercise[]
+
+  // Add relationship to Server through ServerField join table
+  servers ServerField[]
+
+  @@index([modelId])
+}
+
+model ServerField {
+  id       String @id @default(uuid())
+  serverId String
+  fieldId  String
+
+  server Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  field  Field  @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serverId])
+  @@index([fieldId])
+}
+
+model File {
+  id        String    @id @default(uuid())
+  name      String
+  url       String // Đường dẫn file (trên cloud/local)
+  fieldId   String
+  field     Field     @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  Chatbox   Chatbox[]
+
+  @@index([fieldId])
+}
+
+model Chatbox {
+  id           String         @id
+  title        String
+  message      String         @db.Text // Thay đổi từ Json thành String
+  modelId      String
+  fieldId      String
+  fileId       String? // Nếu chatbox này gắn với 1 file cụ thể
+  model        Model          @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  field        Field          @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  file         File?          @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  userId       String? // <-- thêm dấu hỏi để cho phép null
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  FieldChatbox FieldChatbox[]
+  Score        Score[]
+  Exam         Exam?          @relation(fields: [examId], references: [id])
+  examId       String?
+
+  // Remove the incorrect self-relation
+  // chatboxes Chatbox[]
+
+  // Instead, add proper relation fields for Exercise if it's needed
+  // Exercise     Exercise?      @relation(fields: [exerciseId], references: [id])
+  // exerciseId   String?
+
+  @@index([modelId])
+  @@index([fieldId])
+  @@index([fileId])
+  @@index([userId])
+  @@index([examId])
+}
+
+model FieldChatbox {
+  id        String @id @default(uuid())
+  fieldId   String
+  chatboxId String
+
+  field   Field   @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  chatbox Chatbox @relation(fields: [chatboxId], references: [id], onDelete: Cascade)
+
+  @@index([fieldId])
+  @@index([chatboxId])
+}
+
+model Score {
+  id         String    @id @default(uuid())
+  profileId  String
+  profile    Profile   @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  fieldId    String?
+  field      Field?    @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  modelId    String?
+  model      Model?    @relation(fields: [modelId], references: [id], onDelete: SetNull)
+  chatboxId  String?
+  chatbox    Chatbox?  @relation(fields: [chatboxId], references: [id])
+  score      Decimal   @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  Exam       Exam?     @relation(fields: [examId], references: [id])
+  examId     String?
+  Exercise   Exercise? @relation(fields: [exerciseId], references: [id], onDelete: SetNull)
+  exerciseId String?
+
+  @@index([profileId])
+  @@index([fieldId])
+  @@index([modelId])
+  @@index([chatboxId])
+  @@index([examId])
+  @@index([exerciseId])
+}
+
+model Exam {
+  id               String       @id @default(uuid())
+  name             String
+  description      String?
+  prompt           String?      @db.Text
+  isActive         Boolean      @default(true)
+  // Liên kết với Channel
+  channelId        String?
+  channel          Channel?     @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  // Các trường hiện có
+  modelId          String
+  model            Model        @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  files            ExamFile[]
+  chatboxes        Chatbox[]
+  questionCount    Int?
+  allowReferences  Boolean?     @default(false)
+  shuffleQuestions Boolean?     @default(false)
+  deadline         DateTime? // Add deadline field
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  Score            Score[]
+  examResults      ExamResult[] // <-- Thêm dòng này
+
+  @@index([modelId])
+  @@index([channelId]) // Thêm index cho channelId
+}
+
+model Exercise {
+  id               String           @id @default(uuid())
+  name             String
+  description      String?
+  isActive         Boolean          @default(true)
+  // Liên kết với Channel
+  channelId        String?
+  channel          Channel?         @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  // Các trường hiện có
+  fieldId          String?
+  field            Field?           @relation(fields: [fieldId], references: [id], onDelete: SetNull)
+  modelId          String
+  model            Model            @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  questionCount    Int?
+  allowReferences  Boolean?         @default(false)
+  shuffleQuestions Boolean?         @default(false)
+  deadline         DateTime?
+  files            ExerciseFile[]
+  results          ExerciseResult[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  Score     Score[]
+
+  // Remove the relation that's causing the error
+  // chatboxes    Chatbox[]
+
+  @@index([modelId])
+  @@index([fieldId])
+  @@index([channelId]) // Thêm index cho channelId
+}
+
+// File cho Exam
+model ExamFile {
+  id        String   @id @default(uuid())
+  name      String
+  url       String // Đường dẫn file (trên cloud/local)
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([examId])
+}
+
+// File cho Exercise - giữ nguyên vì đã tương tự ExamFile
+model ExerciseFile {
+  id         String   @id @default(uuid())
+  name       String
+  url        String // Đường dẫn file (trên cloud/local)
+  exerciseId String
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([exerciseId])
+}
+
+// Thêm model ExerciseResult tương tự như ExamResult
+model ExerciseResult {
+  id          String   @id @default(uuid())
+  userId      String
+  user        Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  exerciseId  String
+  exercise    Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+  score       Float?
+  answers     Json?
+  isEssayType Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, exerciseId])
+  @@index([exerciseId])
+  @@index([userId])
+}
+
+model ExamResult {
+  id        String   @id @default(uuid())
+  examId    String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  examName  String
+  userId    String
+  userName  String
+  answers   Json // Lưu nội dung trả lời: [{question, userAnswer, correctAnswer}]
+  score     Decimal  @db.Decimal(5, 2)
+  duration  String // Thời gian làm bài: "5 phút", "10 phút", ...
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([examId])
+  @@index([userId])
+}
+
+// SystemAssistant model for the system master assistant
+model SystemAssistant {
+  id           String              @id @default(uuid())
+  name         String
+  description  String?
+  type         SystemAssistantType
+  status       AssistantStatus
+  capabilities Json?
+  config       Json?
+  metrics      Json?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  // Relations
+  managedSessions SystemSession[]
+  logs            SystemLog[]
+
+  @@map("system_assistants")
+}
+
+// SystemSession model for tracking system assistant interactions
+model SystemSession {
+  id          String          @id @default(uuid())
+  type        SessionType
+  status      SessionStatus   @default(ACTIVE)
+  metadata    Json?
+  startedAt   DateTime        @default(now())
+  endedAt     DateTime?
+  userId      String
+  user        Profile         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assistantId String
+  assistant   SystemAssistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+
+  messages SystemMessage[]
+
+  @@index([userId])
+  @@index([assistantId])
+  @@map("system_sessions")
+}
+
+// SystemMessage model for system assistant conversations
+model SystemMessage {
+  id        String        @id @default(uuid())
+  sessionId String
+  session   SystemSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role      MessageRole
+  content   String        @db.Text
+  timestamp DateTime      @default(now())
+
+  @@index([sessionId])
+  @@map("system_messages")
+}
+
+// SystemLog model for tracking system operations and events
+model SystemLog {
+  id          String          @id @default(uuid())
+  timestamp   DateTime        @default(now())
+  level       LogLevel
+  action      String
+  details     Json?
+  assistantId String
+  assistant   SystemAssistant @relation(fields: [assistantId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        Profile?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([assistantId])
+  @@index([userId])
+  @@map("system_logs")
+}
+
+model PromptValidationResult {
+  id                  String   @id @default(cuid())
+  assistantId         String
+  overallScore        Int
+  promptAdherence     Int
+  testResults         String   @db.Text // JSON string
+  comprehensiveReport String?  @db.Text
+  evaluatedBy         String
+  evaluatedAt         DateTime @default(now())
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("prompt_validation_results")
+}
+
+enum SystemAssistantType {
+  SYSTEM_MASTER
+  ADMIN_ASSISTANT
+  USER_ASSISTANT
+  MONITORING
+  ANALYTICS
+  MAINTENANCE
+  SECURITY
+  PERFORMANCE
+  BACKUP
+  NOTIFICATION
+}
+
+enum AssistantStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  ERROR
+}
+
+enum SessionType {
+  SYSTEM_MANAGEMENT
+  USER_SUPPORT
+  DATA_ANALYSIS
+  CUSTOM
+  MONITORING
+  ANALYTICS
+  MAINTENANCE
+  DEBUGGING
+}
+
+enum SessionStatus {
+  ACTIVE
+  COMPLETED
+  FAILED
+  TIMEOUT
+  TERMINATED
+  ERROR
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum LogLevel {
+  INFO
+  WARNING
+  ERROR
+  CRITICAL
+}
+
+// Thêm model ProfanityWord để quản lý từ cấm
+model ProfanityWord {
+  id          String            @id @default(uuid())
+  word        String            @unique // Từ cấm (unique để tránh trùng lặp)
+  category    ProfanityCategory @default(GENERAL) // Phân loại từ cấm
+  severity    ProfanitySeverity @default(MEDIUM) // Mức độ nghiêm trọng
+  language    String            @default("vi") // Ngôn ngữ: vi, en, etc.
+  isActive    Boolean           @default(true) // Có đang hoạt động không
+  replacement String? // Từ thay thế tùy chỉnh (nếu không dùng ***)
+
+  // Thông tin tạo/cập nhật
+  createdBy String? // ID người tạo
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Thống kê sử dụng
+  usageCount Int       @default(0) // Số lần từ này bị phát hiện
+  lastUsed   DateTime? // Lần cuối bị phát hiện
+
+  // Relationship với các bản ghi vi phạm
+  violations ProfanityViolation[]
+
+  @@index([word])
+  @@index([category])
+  @@index([language])
+  @@index([isActive])
+}
+
+// Enum cho phân loại từ cấm
+enum ProfanityCategory {
+  GENERAL // Từ cấm chung
+  OFFENSIVE // Từ xúc phạm
+  HATE // Từ thù hận
+  SEXUAL // Từ tình dục
+  VIOLENCE // Từ bạo lực
+  CUSTOM // Từ tùy chỉnh
+}
+
+// Enum cho mức độ nghiêm trọng
+enum ProfanitySeverity {
+  LOW // Thấp - chỉ cảnh báo
+  MEDIUM // Trung bình - thay thế bằng ***
+  HIGH // Cao - chặn tin nhắn
+  CRITICAL // Nghiêm trọng - chặn + báo cáo
+}
+
+// Model lưu lịch sử vi phạm
+model ProfanityViolation {
+  id String @id @default(uuid())
+
+  // Thông tin vi phạm
+  originalText  String @db.Text // Nội dung gốc
+  filteredText  String @db.Text // Nội dung sau khi lọc
+  violatedWords Json // Danh sách từ bị vi phạm: [{"word": "abc", "position": 5}]
+
+  // Thông tin người vi phạm
+  userId   String // ID người vi phạm
+  userName String // Tên người vi phạm
+
+  // Thông tin context
+  contextType ViolationContext @default(CHAT) // Loại context
+  contextId   String? // ID của context (channelId, conversationId, etc.)
+  serverId    String? // ID server (nếu có)
+
+  // Thông tin xử lý
+  action     ViolationAction   @default(FILTER) // Hành động đã thực hiện
+  severity   ProfanitySeverity // Mức độ nghiêm trọng
+  isReported Boolean           @default(false) // Đã báo cáo chưa
+
+  // Relationship
+  profanityWordId String?
+  profanityWord   ProfanityWord? @relation(fields: [profanityWordId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([contextType])
+  @@index([contextId])
+  @@index([serverId])
+  @@index([createdAt])
+  @@index([profanityWordId])
+}
+
+// Enum cho loại context vi phạm
+enum ViolationContext {
+  CHAT // Tin nhắn chat
+  DIRECT // Tin nhắn riêng
+  SERVER_NAME // Tên server
+  CHANNEL_NAME // Tên channel
+  PROFILE // Thông tin profile
+}
+
+// Enum cho hành động xử lý
+enum ViolationAction {
+  FILTER // Lọc từ cấm
+  WARN // Cảnh báo
+  BLOCK // Chặn tin nhắn
+  REPORT // Báo cáo
+  MUTE // Tắt tiếng
+  BAN // Cấm
+}
+
+// Model cấu hình lọc từ cấm cho từng server
+model ProfanityConfig {
+  id String @id @default(uuid())
+
+  // Áp dụng cho server nào (null = global)
+  serverId String? @unique
+
+  // Cấu hình chung
+  isEnabled       Boolean           @default(true) // Bật/tắt tính năng
+  defaultSeverity ProfanitySeverity @default(MEDIUM) // Mức độ mặc định
+  defaultAction   ViolationAction   @default(FILTER) // Hành động mặc định
+
+  // Cấu hình nâng cao
+  enableAutolearn Boolean @default(false) // Tự động học từ mới
+  enableWarning   Boolean @default(true) // Hiển thị cảnh báo
+  warningMessage  String? // Tin nhắn cảnh báo tùy chỉnh
+
+  // Whitelist/Blacklist
+  whitelistWords    Json? // Danh sách từ được phép: ["word1", "word2"]
+  customReplacement String @default("***") // Ký tự thay thế
+
+  // Thống kê
+  totalViolations Int       @default(0) // Tổng số vi phạm
+  lastViolation   DateTime? // Vi phạm cuối cùng
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([serverId])
+}
